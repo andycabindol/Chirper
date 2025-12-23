@@ -250,7 +250,7 @@ struct ResultsView: View {
                             Button {
                                 selectedSpecies = summary
                             } label: {
-                                speciesRow(summary)
+                                speciesRowContent(summary)
                             }
                             .buttonStyle(.plain)
                         }
@@ -262,10 +262,11 @@ struct ResultsView: View {
         }
     }
 
-    private func speciesRow(_ summary: SpeciesSummary) -> some View {
+    private func speciesRowContent(_ summary: SpeciesSummary) -> some View {
         let (commonName, scientificName) = parseSpeciesName(summary.species)
         
-        return ZStack {
+        return
+        ZStack {
             RoundedRectangle(cornerRadius: 24, style: .continuous)
                 .fill(.ultraThinMaterial)
                 .overlay(

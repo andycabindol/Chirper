@@ -105,4 +105,47 @@ struct GlassBanner: View {
     }
 }
 
+struct GlassTrashButton: View {
+    let action: () -> Void
+    let scale: CGFloat
+    
+    init(action: @escaping () -> Void, scale: CGFloat = 1.0) {
+        self.action = action
+        self.scale = scale
+    }
+    
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "trash.fill")
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundStyle(.white)
+                .frame(width: 60, height: 60)
+                .background(
+                    ZStack {
+                        Circle()
+                            .fill(.ultraThinMaterial)
+                        Circle()
+                            .fill(Color.red.opacity(0.6))
+                    }
+                )
+                .overlay(
+                    Circle()
+                        .strokeBorder(
+                            LinearGradient(
+                                colors: [
+                                    .white.opacity(0.4),
+                                    .white.opacity(0.1)
+                                ],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            ),
+                            lineWidth: 1
+                        )
+                )
+                .scaleEffect(scale)
+        }
+        .buttonStyle(.plain)
+    }
+}
+
 

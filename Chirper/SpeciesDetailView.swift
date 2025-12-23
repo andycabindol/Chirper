@@ -81,6 +81,7 @@ final class SpeciesAudioPlayer: ObservableObject {
 
 struct SpeciesDetailView: View {
     @EnvironmentObject var viewModel: AppViewModel
+    @Environment(\.dismiss) private var dismiss
     let species: String
 
     @State private var shareURL: URL?
@@ -92,6 +93,10 @@ struct SpeciesDetailView: View {
     @State private var isOpeningShare = false
     @State private var preparedCombinedURL: URL?
     @State private var preparedSeparateURLs: [URL] = []
+    @State private var swipedClipIndex: Int? = nil
+    @State private var clipSwipeOffset: [Int: CGFloat] = [:]
+    @State private var showDeleteClipConfirmation: Int? = nil
+    @State private var isDraggingClip: Int? = nil
     
     private var segments: [Segment] {
         viewModel.speciesSegments[species] ?? []
@@ -113,6 +118,15 @@ struct SpeciesDetailView: View {
                     BirdImageFullWidthView(species: species)
                         .frame(height: 200)
                         .clipped()
+                        .onTapGesture {
+                            // Reset swiped items when tapping elsewhere
+                            if let swiped = swipedClipIndex {
+                                withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
+                                    clipSwipeOffset[swiped] = 0
+                                    swipedClipIndex = nil
+                                }
+                            }
+                        }
                     
                     VStack(alignment: .leading, spacing: 12) {
                         // Common name (big and bold)
@@ -129,11 +143,20 @@ struct SpeciesDetailView: View {
                     .padding(.horizontal, 20)
                     .padding(.top, 16)
                     .padding(.bottom, 20)
+                    .onTapGesture {
+                        // Reset swiped items when tapping elsewhere
+                        if let swiped = swipedClipIndex {
+                            withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
+                                clipSwipeOffset[swiped] = 0
+                                swipedClipIndex = nil
+                            }
+                        }
+                    }
                     
                     // Individual clips
                     VStack(spacing: 12) {
                         ForEach(Array(segments.enumerated()), id: \.offset) { index, segment in
-                            ClipRow(
+                            ClipRowWithSwipe(
                                 segment: segment,
                                 index: index,
                                 isPlaying: playingClipIndex == index,
@@ -184,6 +207,15 @@ struct SpeciesDetailView: View {
                                     preparedSeparateURLs = []
                                     isPreparingExport = true
                                     prepareExports()
+                                },
+                                swipeOffset: Binding(
+                                    get: { clipSwipeOffset[index] ?? 0 },
+                                    set: { clipSwipeOffset[index] = $0 }
+                                ),
+                                swipedIndex: $swipedClipIndex,
+                                isDraggingClip: $isDraggingClip,
+                                onDelete: {
+                                    showDeleteClipConfirmation = index
                                 }
                             )
                             .environmentObject(viewModel)
@@ -377,6 +409,27 @@ struct SpeciesDetailView: View {
                 // Reset loading state when share sheet is dismissed
                 isOpeningShare = false
             }
+        }
+        .alert("Delete Clip", isPresented: Binding(
+            get: { showDeleteClipConfirmation != nil },
+            set: { if !$0 { 
+                if let index = showDeleteClipConfirmation {
+                    withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
+                        clipSwipeOffset[index] = 0
+                        swipedClipIndex = nil
+                    }
+                }
+                showDeleteClipConfirmation = nil 
+            } }
+        )) {
+            Button("Cancel", role: .cancel) { }
+            Button("Delete", role: .destructive) {
+                if let index = showDeleteClipConfirmation {
+                    deleteClip(at: index)
+                }
+            }
+        } message: {
+            Text("Are you sure you want to delete this clip? This action cannot be undone.")
         }
     }
     
@@ -594,6 +647,63 @@ struct SpeciesDetailView: View {
         }
     }
     
+    private func deleteClip(at index: Int) {
+        // Stop playback if this clip is playing
+        if playingClipIndex == index {
+            playingClipIndex = nil
+        }
+        
+        // Remove the segment
+        if var segments = viewModel.speciesSegments[species] {
+            segments.remove(at: index)
+            if segments.isEmpty {
+                // Delete the species if this was the last clip
+                viewModel.speciesSegments.removeValue(forKey: species)
+                viewModel.trimValues.removeValue(forKey: species)
+                // Close the detail view by dismissing
+                DispatchQueue.main.async {
+                    dismiss()
+                }
+            } else {
+                viewModel.speciesSegments[species] = segments
+            }
+        }
+        
+        // Remove trim values for this clip and shift remaining ones
+        if var trimValues = viewModel.trimValues[species] {
+            trimValues.removeValue(forKey: index)
+            // Shift remaining trim values
+            var newTrimValues: [Int: TrimValues] = [:]
+            for (oldIndex, value) in trimValues {
+                if oldIndex > index {
+                    newTrimValues[oldIndex - 1] = value
+                } else {
+                    newTrimValues[oldIndex] = value
+                }
+            }
+            viewModel.trimValues[species] = newTrimValues.isEmpty ? nil : newTrimValues
+        }
+        
+        // Reset swipe state
+        clipSwipeOffset.removeValue(forKey: index)
+        // Shift remaining swipe offsets
+        var newSwipeOffsets: [Int: CGFloat] = [:]
+        for (oldIndex, offset) in clipSwipeOffset {
+            if oldIndex > index {
+                newSwipeOffsets[oldIndex - 1] = offset
+            } else {
+                newSwipeOffsets[oldIndex] = offset
+            }
+        }
+        clipSwipeOffset = newSwipeOffsets
+        
+        // Invalidate exports
+        preparedCombinedURL = nil
+        preparedSeparateURLs = []
+        isPreparingExport = true
+        prepareExports()
+    }
+    
     private func parseSpeciesName(_ species: String) -> (commonName: String, scientificName: String) {
         if let underscoreIndex = species.lastIndex(of: "_") {
             let scientificName = String(species[..<underscoreIndex])
@@ -604,6 +714,151 @@ struct SpeciesDetailView: View {
         }
     }
 
+struct ClipRowWithSwipe: View {
+    let segment: Segment
+    let index: Int
+    let isPlaying: Bool
+    @Binding var trimStart: TimeInterval
+    @Binding var trimEnd: TimeInterval
+    let onPlay: () -> Void
+    let onFinish: () -> Void
+    let onTrimChanged: () -> Void
+    @Binding var swipeOffset: CGFloat
+    @Binding var swipedIndex: Int?
+    @Binding var isDraggingClip: Int?
+    let onDelete: () -> Void
+    
+    @State private var isDraggingHandle = false
+    
+    var body: some View {
+        let deleteButtonScale = swipeOffset < 0 ? min(1.0, abs(swipeOffset) / 100.0) : 0.0
+        
+        return ZStack(alignment: .trailing) {
+            // Delete button - behind the clip, scales up as clip is swiped
+            HStack {
+                Spacer()
+                GlassTrashButton(
+                    action: {
+                        onDelete()
+                    },
+                    scale: deleteButtonScale
+                )
+                .padding(.trailing, 12)
+                .zIndex(-1)
+            }
+            
+            // Main content - on top
+            ClipRow(
+                segment: segment,
+                index: index,
+                isPlaying: isPlaying,
+                trimStart: $trimStart,
+                trimEnd: $trimEnd,
+                onPlay: {
+                    // Only play on tap, not during drag
+                    if swipeOffset == 0 && isDraggingClip != index {
+                        onPlay()
+                    } else if swipeOffset != 0 {
+                        // Reset swipe if tapped while swiped
+                        withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
+                            swipeOffset = 0
+                            swipedIndex = nil
+                        }
+                    }
+                },
+                onFinish: onFinish,
+                onTrimChanged: onTrimChanged,
+                onHandleDragChanged: { dragging in
+                    isDraggingHandle = dragging
+                }
+            )
+            .offset(x: swipeOffset)
+            .zIndex(1)
+            .simultaneousGesture(
+                DragGesture(minimumDistance: 15)
+                    .onChanged { value in
+                        // Don't activate swipe if handle is being dragged
+                        guard !isDraggingHandle else { return }
+                        
+                        // Only activate if horizontal movement is clearly dominant
+                        let horizontalMovement = abs(value.translation.width)
+                        let verticalMovement = abs(value.translation.height)
+                        
+                        // Require at least 30 points horizontal and 2.5x more horizontal than vertical
+                        if horizontalMovement > 30 && horizontalMovement > verticalMovement * 2.5 {
+                            // Mark as dragging to prevent play action
+                            if isDraggingClip != index {
+                                isDraggingClip = index
+                            }
+                            
+                            // Close other swiped items immediately (no animation)
+                            if let otherSwiped = swipedIndex, otherSwiped != index {
+                                swipeOffset = 0
+                                swipedIndex = nil
+                            }
+                            
+                            if value.translation.width < 0 {
+                                // Swiping left
+                                let newOffset = max(value.translation.width, -100)
+                                swipeOffset = newOffset
+                                if swipedIndex != index {
+                                    swipedIndex = index
+                                }
+                            } else if swipeOffset < 0 {
+                                // Swiping right to close - no animation during drag
+                                let newOffset = min(value.translation.width + swipeOffset, 0)
+                                swipeOffset = newOffset
+                            }
+                        }
+                    }
+                    .onEnded { value in
+                        // Clear dragging state
+                        isDraggingClip = nil
+                        
+                        // Only process if it was clearly a horizontal swipe
+                        let horizontalMovement = abs(value.translation.width)
+                        let verticalMovement = abs(value.translation.height)
+                        
+                        if horizontalMovement > 30 && horizontalMovement > verticalMovement * 2.5 {
+                            withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
+                                if value.translation.width < -50 {
+                                    // Swiped enough to reveal delete - keep it swiped
+                                    swipeOffset = -100
+                                    swipedIndex = index
+                                } else if swipeOffset < 0 && value.translation.width > 0 {
+                                    // Swiping right to close
+                                    swipeOffset = 0
+                                    swipedIndex = nil
+                                } else if swipeOffset < 0 {
+                                    // Not enough to fully reveal, but keep it partially swiped
+                                    swipeOffset = -100
+                                    swipedIndex = index
+                                } else {
+                                    // Not enough, snap back
+                                    swipeOffset = 0
+                                    if swipedIndex == index {
+                                        swipedIndex = nil
+                                    }
+                                }
+                            }
+                        } else {
+                            // Was primarily vertical - don't change swipe state
+                            // Only reset if it was a very small movement
+                            if horizontalMovement < 10 {
+                                withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
+                                    swipeOffset = 0
+                                    if swipedIndex == index {
+                                        swipedIndex = nil
+                                    }
+                                }
+                            }
+                        }
+                    }
+            )
+        }
+    }
+}
+
 struct ClipRow: View {
     let segment: Segment
     let index: Int
@@ -613,6 +868,7 @@ struct ClipRow: View {
     let onPlay: () -> Void
     let onFinish: () -> Void
     let onTrimChanged: () -> Void
+    let onHandleDragChanged: ((Bool) -> Void)?
     
     @EnvironmentObject var viewModel: AppViewModel
     @StateObject private var clipPlayer = ClipAudioPlayer()
@@ -679,7 +935,8 @@ struct ClipRow: View {
                 },
                 onTrimChanged: {
                     onTrimChanged()
-                }
+                },
+                onHandleDragChanged: onHandleDragChanged
             )
             .environmentObject(viewModel)
             .frame(height: 40)
@@ -697,12 +954,24 @@ struct ClipRow: View {
         .onChange(of: isPlaying) { playing in
             if !playing {
                 clipPlayer.stop()
+            } else {
+                // Update onFinish callback when playing starts to ensure it loops
+                clipPlayer.onFinish = { [weak clipPlayer] in
+                    DispatchQueue.main.async {
+                        // Always loop if we reach the end - the onChange will stop it if needed
+                        clipPlayer?.seek(to: 0)
+                        clipPlayer?.play()
+                    }
+                }
             }
         }
         .onAppear {
             clipPlayer.onFinish = {
                 DispatchQueue.main.async {
-                    onFinish() // Reset to play button
+                    // Loop by restarting from the beginning
+                    // The onChange handler will stop it if isPlaying becomes false
+                    clipPlayer.seek(to: 0)
+                    clipPlayer.play()
                 }
             }
             // Listen for stop audio notification
@@ -733,7 +1002,10 @@ struct ClipRow: View {
             )
             clipPlayer.onFinish = {
                 DispatchQueue.main.async {
-                    onFinish() // Reset to play button
+                    // Loop by restarting from the beginning
+                    // The onChange handler will stop it if isPlaying becomes false
+                    clipPlayer.seek(to: 0)
+                    clipPlayer.play()
                 }
             }
             try clipPlayer.load(buffer: clipBuffer, sampleRate: sampleRate)
@@ -841,6 +1113,7 @@ struct WaveformView: View {
     let onSeek: (TimeInterval) -> Void
     let onStop: () -> Void
     let onTrimChanged: () -> Void
+    let onHandleDragChanged: ((Bool) -> Void)?
     
     @EnvironmentObject var viewModel: AppViewModel
     @State private var waveformData: [Float] = []
@@ -975,6 +1248,9 @@ struct WaveformView: View {
                     .onChanged { value in
                         // If we're already dragging a handle, continue with that handle
                         if let handle = draggingHandle {
+                            // Notify that handle is being dragged
+                            onHandleDragChanged?(true)
+                            
                             // Haptic feedback - tick every 0.05 seconds while dragging
                             let currentTime = Date()
                             if currentTime.timeIntervalSince(lastHapticTime) > 0.05 {
@@ -1018,6 +1294,7 @@ struct WaveformView: View {
                                     onStop()
                                 }
                                 draggingHandle = .left
+                                onHandleDragChanged?(true)
                                 initialTrimStart = trimStart
                                 lastHapticTime = Date()
                                 hapticGenerator.prepare()
@@ -1038,6 +1315,7 @@ struct WaveformView: View {
                                     onStop()
                                 }
                                 draggingHandle = .right
+                                onHandleDragChanged?(true)
                                 initialTrimEnd = trimEnd
                                 lastHapticTime = Date()
                                 hapticGenerator.prepare()
@@ -1068,6 +1346,7 @@ struct WaveformView: View {
                         if draggingHandle != nil {
                             // Dragging ended - trigger export preparation
                             draggingHandle = nil
+                            onHandleDragChanged?(false)
                             onTrimChanged()
                         } else if isPlaying {
                             // Waveform scrubbing
