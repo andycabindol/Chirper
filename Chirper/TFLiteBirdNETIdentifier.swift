@@ -14,7 +14,7 @@ final class TFLiteBirdNETIdentifier: BirdIdentifier {
 
     init() throws {
         // Resolve actual BirdNET asset locations in the bundle.
-        let (audioURL, metaURL, labels) = try TFLiteBirdNETIdentifier.resolveAssets()
+        let (audioURL, _, labels) = try TFLiteBirdNETIdentifier.resolveAssets()
         self.labels = labels
 
         var audioOptions = Interpreter.Options()

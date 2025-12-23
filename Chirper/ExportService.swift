@@ -4,12 +4,57 @@ import SwiftUI
 import UIKit
 
 struct ExportService {
+    // MARK: - Filename generation
+    
+    static func generateFilename(
+        species: String,
+        recordingDate: Date,
+        clipIndex: Int? = nil
+    ) -> String {
+        let dateFormatter = DateFormatter()
+        dateFormatter.dateFormat = "MM-dd-yyyy"
+        let dateString = dateFormatter.string(from: recordingDate)
+        
+        let timeFormatter = DateFormatter()
+        timeFormatter.dateFormat = "HHmmss"
+        let timeString = timeFormatter.string(from: recordingDate)
+        
+        // Parse species name
+        let (commonName, scientificName): (String, String)
+        if let underscoreIndex = species.lastIndex(of: "_") {
+            scientificName = String(species[..<underscoreIndex])
+            commonName = String(species[species.index(after: underscoreIndex)...])
+        } else {
+            commonName = species
+            scientificName = ""
+        }
+        
+        // Sanitize names
+        let sanitizedCommon = commonName.sanitizedFilename()
+        let sanitizedScientific = scientificName.sanitizedFilename()
+        
+        // Build filename
+        var components: [String] = [dateString, sanitizedCommon]
+        if !sanitizedScientific.isEmpty {
+            components.append(sanitizedScientific)
+        }
+        components.append(timeString)
+        
+        // Add clip index if provided
+        if let index = clipIndex {
+            components.append("\(index)")
+        }
+        
+        return components.joined(separator: "-") + ".wav"
+    }
+    
     // MARK: - High-level exports
 
     static func exportPerSpecies(
         speciesSegments: [String: [Segment]],
         from buffer: AVAudioPCMBuffer,
-        sampleRate: Double
+        sampleRate: Double,
+        recordingDate: Date
     ) throws -> [URL] {
         var urls: [URL] = []
 
@@ -21,7 +66,10 @@ struct ExportService {
                 sampleRate: sampleRate
             )
 
-            let fileName = "\(species.sanitizedFilename()).wav"
+            let fileName = generateFilename(
+                species: species,
+                recordingDate: recordingDate
+            )
             let url = try writeTempWav(
                 buffer: concat,
                 sampleRate: sampleRate,
@@ -36,7 +84,8 @@ struct ExportService {
     static func exportPerCall(
         speciesSegments: [String: [Segment]],
         from buffer: AVAudioPCMBuffer,
-        sampleRate: Double
+        sampleRate: Double,
+        recordingDate: Date
     ) throws -> [URL] {
         var urls: [URL] = []
 
@@ -50,10 +99,10 @@ struct ExportService {
                     sampleRate: sampleRate
                 )
 
-                let fileName = String(
-                    format: "%@_call_%03d.wav",
-                    species.sanitizedFilename(),
-                    idx + 1
+                let fileName = generateFilename(
+                    species: species,
+                    recordingDate: recordingDate,
+                    clipIndex: idx + 1
                 )
                 let url = try writeTempWav(
                     buffer: concat,
@@ -109,10 +158,29 @@ struct ShareSheet: UIViewControllerRepresentable {
     var completion: (() -> Void)?
 
     func makeUIViewController(context: Context) -> UIActivityViewController {
+        // Ensure file URLs are accessible
+        let accessibleItems = activityItems.compactMap { item -> Any? in
+            if let url = item as? URL {
+                // For file URLs, ensure they're accessible
+                // Temp directory files should be accessible, but we verify
+                if url.isFileURL && FileManager.default.fileExists(atPath: url.path) {
+                    return url
+                }
+            }
+            return item
+        }
+        
         let controller = UIActivityViewController(
-            activityItems: activityItems,
+            activityItems: accessibleItems.isEmpty ? activityItems : accessibleItems,
             applicationActivities: nil
         )
+        
+        // Configure for better performance
+        if let popover = controller.popoverPresentationController {
+            // This helps avoid some LaunchServices delays on iPad
+            popover.permittedArrowDirections = .any
+        }
+        
         controller.completionWithItemsHandler = { _, _, _, _ in
             completion?()
         }

@@ -32,12 +32,16 @@ final class AppViewModel: ObservableObject {
     @Published var detections: [Detection] = []
     @Published var speciesSegments: [String: [Segment]] = [:]
     @Published var usingMock: Bool = false
+    @Published var recordingDate: Date = Date()
 
     // UI controls (results)
     @Published var exportMode: ExportMode = .perSpecies
     @Published var confidenceThreshold: Double = 0.25
     // Keep very small default padding; user can increase if desired.
     @Published var paddingMs: Double = 50
+    
+    // Trim values per species and segment index: [species: [segmentIndex: TrimValues]]
+    @Published var trimValues: [String: [Int: TrimValues]] = [:]
 
     // Processing state
     @Published var processingMessage: String = "Preparing…"
@@ -70,6 +74,8 @@ final class AppViewModel: ObservableObject {
         audioBuffer = nil
         detections = []
         speciesSegments = [:]
+        trimValues = [:]
+        recordingDate = Date()
         processingMessage = "Preparing…"
         processingProgress = 0
         currentWindowIndex = 0
@@ -98,6 +104,15 @@ final class AppViewModel: ObservableObject {
                     }
                 }
 
+                // Get recording date from file attributes or use current date
+                let recordingDate: Date
+                if let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
+                   let creationDate = attributes[.creationDate] as? Date {
+                    recordingDate = creationDate
+                } else {
+                    recordingDate = Date()
+                }
+                
                 // A) Decode
                 let decoded = try AudioProcessingService.decodeAnyAudioToPCMBuffer(url: url)
                 try Task.checkCancellation()
@@ -119,6 +134,7 @@ final class AppViewModel: ObservableObject {
                 await MainActor.run {
                     self.audioBuffer = buffer
                     self.sampleRate = sampleRate
+                    self.recordingDate = recordingDate
                     self.processingMessage = "Analyzing with BirdNET (TFLite)…"
                 }
 
@@ -170,6 +186,16 @@ final class AppViewModel: ObservableObject {
                     self.speciesSegments = speciesSegments
                     self.processingProgress = 1.0
                     self.processingMessage = "Done"
+                }
+                
+                // Preload bird images before showing results
+                let speciesList = Array(speciesSegments.keys)
+                await BirdImageService.shared.preloadImages(for: speciesList)
+                
+                // Small delay to ensure smooth transition
+                try? await Task.sleep(nanoseconds: 500_000_000) // 0.5 seconds
+                
+                await MainActor.run {
                     self.currentScreen = .results
                 }
             } catch {
