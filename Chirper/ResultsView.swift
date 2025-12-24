@@ -19,6 +19,7 @@ struct ResultsView: View {
     @State private var isShowingFilterSheet = false
     @State private var tempConfidenceThreshold: Double = 0.75
     @State private var previousSliderValue: Double = 0.75
+    @State private var isShowingDeleteConfirmation = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -215,16 +216,42 @@ struct ResultsView: View {
     private var cancelButton: some View {
         Button {
             if isSelectionMode {
-                isSelectionMode = false
-                selectedSpeciesSet.removeAll()
+                isShowingDeleteConfirmation = true
             } else {
                 viewModel.resetToImport()
             }
         } label: {
-            Text(isSelectionMode ? "Cancel" : "Import another audio")
-                .font(.body)
-                .foregroundColor(.gray)
+            if isSelectionMode {
+                Text("Delete species (\(selectedSpeciesSet.count))")
+                    .font(.body)
+                    .fontWeight(.regular)
+                    .foregroundColor(.red)
+            } else {
+                Text("Import another audio")
+                    .font(.body)
+                    .foregroundColor(.gray)
+            }
         }
+        .alert("Delete Species", isPresented: $isShowingDeleteConfirmation) {
+            Button("Cancel", role: .cancel) { }
+            Button("Delete", role: .destructive) {
+                deleteSelectedSpecies()
+            }
+        } message: {
+            Text("Are you sure you want to delete \(selectedSpeciesSet.count) selected species? This action cannot be undone.")
+        }
+    }
+    
+    private func deleteSelectedSpecies() {
+        // Remove selected species from speciesSegments and trimValues
+        for species in selectedSpeciesSet {
+            viewModel.speciesSegments.removeValue(forKey: species)
+            viewModel.trimValues.removeValue(forKey: species)
+        }
+        
+        // Exit selection mode and clear selection
+        isSelectionMode = false
+        selectedSpeciesSet.removeAll()
     }
     
     private var exportOptionsSheet: some View {
