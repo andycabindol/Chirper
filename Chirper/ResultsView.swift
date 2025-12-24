@@ -1,6 +1,7 @@
 import SwiftUI
 import AVFoundation
 import Combine
+import UIKit
 
 struct ResultsView: View {
     @EnvironmentObject var viewModel: AppViewModel
@@ -13,6 +14,8 @@ struct ResultsView: View {
     @State private var playingSpecies: String? = nil
     @StateObject private var speciesPlayer = SpeciesClipsPlayer()
     @State private var playbackTask: Task<Void, Never>? = nil
+    @State private var isSelectionMode = false
+    @State private var selectedSpeciesSet: Set<String> = []
 
     var body: some View {
         VStack(spacing: 0) {
@@ -86,27 +89,41 @@ struct ResultsView: View {
         VStack(spacing: 8) {
             HStack {
                 HStack(spacing: 8) {
-                    Image(systemName: "checkmark.circle.fill")
-                        .foregroundColor(.green)
-                        .font(.title2)
-                    
-                    Text("Extracted \(totalClipCount) chirp\(totalClipCount == 1 ? "" : "s")")
-                        .font(.title3.bold())
-                        .foregroundColor(.black)
-                        .lineLimit(1)
+                    if isSelectionMode {
+                        Text("\(selectedSpeciesSet.count) selected")
+                            .font(.title3.bold())
+                            .foregroundColor(.black)
+                            .lineLimit(1)
+                    } else {
+                        Image(systemName: "checkmark.circle.fill")
+                            .foregroundColor(.green)
+                            .font(.title2)
+                        
+                        Text("Extracted \(totalClipCount) chirp\(totalClipCount == 1 ? "" : "s")")
+                            .font(.title3.bold())
+                            .foregroundColor(.black)
+                            .lineLimit(1)
+                    }
                 }
                 
                 Spacer()
                 
-                Button {
-                    viewModel.resetToImport()
-                } label: {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 16, weight: .semibold))
-                        .foregroundColor(.black)
-                        .frame(width: 32, height: 32)
-                        .background(Color.white)
-                        .clipShape(Circle())
+                if isSelectionMode {
+                    GlassCancelButton {
+                        isSelectionMode = false
+                        selectedSpeciesSet.removeAll()
+                    }
+                } else {
+                    Button {
+                        viewModel.resetToImport()
+                    } label: {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 16, weight: .semibold))
+                            .foregroundColor(.black)
+                            .frame(width: 32, height: 32)
+                            .background(Color.white)
+                            .clipShape(Circle())
+                    }
                 }
             }
 
@@ -141,27 +158,49 @@ struct ResultsView: View {
             .opacity(1.0)
         } else {
             Button {
-                isShowingExportOptions = true
+                if isSelectionMode {
+                    isShowingExportOptions = true
+                } else {
+                    isShowingExportOptions = true
+                }
             } label: {
-                Text("Export all (\(totalClipCount))")
-                    .font(.headline)
-                    .foregroundColor(.white)
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 50)
-                    .background(Color.black)
-                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                if isSelectionMode {
+                    let selectedCount = selectedSpeciesSet.reduce(0) { total, species in
+                        total + (viewModel.speciesSegments[species]?.count ?? 0)
+                    }
+                    Text("Export selected (\(selectedCount))")
+                        .font(.headline)
+                        .foregroundColor(.white)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 50)
+                        .background(selectedSpeciesSet.isEmpty ? Color.black.opacity(0.3) : Color.black)
+                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                } else {
+                    Text("Export all (\(totalClipCount))")
+                        .font(.headline)
+                        .foregroundColor(.white)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 50)
+                        .background(Color.black)
+                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                }
             }
             .buttonStyle(.plain)
-            .disabled(viewModel.speciesSegments.isEmpty)
-            .opacity(viewModel.speciesSegments.isEmpty ? 0.5 : 1.0)
+            .disabled(isSelectionMode ? selectedSpeciesSet.isEmpty : viewModel.speciesSegments.isEmpty)
+            .opacity((isSelectionMode ? selectedSpeciesSet.isEmpty : viewModel.speciesSegments.isEmpty) ? 0.5 : 1.0)
         }
     }
     
     private var cancelButton: some View {
         Button {
-            viewModel.resetToImport()
+            if isSelectionMode {
+                isSelectionMode = false
+                selectedSpeciesSet.removeAll()
+            } else {
+                viewModel.resetToImport()
+            }
         } label: {
-            Text("Import another audio")
+            Text(isSelectionMode ? "Cancel" : "Import another audio")
                 .font(.body)
                 .foregroundColor(.gray)
         }
@@ -181,46 +220,61 @@ struct ResultsView: View {
                 .padding(.horizontal, 20)
                 .padding(.top, 20)
                 
-                Group {
-                    if isExportingAll {
-                        Button {
-                            // Disabled
-                        } label: {
-                            HStack(spacing: 8) {
-                                ProgressView()
-                                    .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                                Text("Exporting...")
-                                    .font(.headline)
-                                    .foregroundColor(.white)
-                            }
-                            .frame(maxWidth: .infinity)
-                            .frame(height: 50)
-                            .background(Color.black.opacity(0.6))
-                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                        }
-                        .buttonStyle(.plain)
-                        .disabled(true)
-                    } else {
-                        Button {
-                            isShowingExportOptions = false
-                            exportAll()
-                        } label: {
-                            let count = viewModel.exportMode == .perSpecies 
-                                ? viewModel.speciesSummaries.count 
-                                : totalClipCount
-                            Text("Confirm export all (\(count))")
+                if isExportingAll {
+                    Button {
+                        // Disabled
+                    } label: {
+                        HStack(spacing: 8) {
+                            ProgressView()
+                                .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                            Text("Exporting...")
                                 .font(.headline)
                                 .foregroundColor(.white)
-                                .frame(maxWidth: .infinity)
-                                .frame(height: 50)
-                                .background(Color.black)
-                                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                         }
-                        .buttonStyle(.plain)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 50)
+                        .background(Color.black.opacity(0.6))
+                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                     }
+                    .buttonStyle(.plain)
+                    .disabled(true)
+                    .padding(.horizontal, 20)
+                    .padding(.bottom, 20)
+                } else {
+                    let count: Int = {
+                        if isSelectionMode {
+                            return viewModel.exportMode == .perSpecies 
+                                ? selectedSpeciesSet.count 
+                                : selectedSpeciesSet.reduce(0) { total, species in
+                                    total + (viewModel.speciesSegments[species]?.count ?? 0)
+                                }
+                        } else {
+                            return viewModel.exportMode == .perSpecies 
+                                ? filteredSpeciesSummaries.count 
+                                : totalClipCount
+                        }
+                    }()
+                    
+                    Button {
+                        isShowingExportOptions = false
+                        if isSelectionMode {
+                            exportSelected()
+                        } else {
+                            exportAll()
+                        }
+                    } label: {
+                        Text("Confirm export \(isSelectionMode ? "selected" : "all") (\(count))")
+                            .font(.headline)
+                            .foregroundColor(.white)
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 50)
+                            .background(Color.black)
+                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.horizontal, 20)
+                    .padding(.bottom, 20)
                 }
-                .padding(.horizontal, 20)
-                .padding(.bottom, 20)
             }
             .navigationTitle("Export Options")
             .navigationBarTitleDisplayMode(.inline)
@@ -228,13 +282,17 @@ struct ResultsView: View {
         .presentationDetents([.height(180)])
     }
     
+    private var filteredSpeciesSummaries: [SpeciesSummary] {
+        viewModel.speciesSummaries.filter { $0.maxConfidence > 0.75 }
+    }
+    
     private var totalClipCount: Int {
-        viewModel.speciesSummaries.reduce(0) { $0 + $1.clipCount }
+        filteredSpeciesSummaries.reduce(0) { $0 + $1.clipCount }
     }
 
     private var listSection: some View {
         Group {
-            if viewModel.speciesSummaries.isEmpty {
+            if filteredSpeciesSummaries.isEmpty {
                 GlassCard {
                     Text("No species above the current confidence threshold. Try lowering it or using a different recording.")
                         .font(.subheadline)
@@ -246,13 +304,54 @@ struct ResultsView: View {
             } else {
                 ScrollView {
                     LazyVStack(spacing: 12) {
-                        ForEach(viewModel.speciesSummaries) { summary in
-                            Button {
-                                selectedSpecies = summary
-                            } label: {
+                        ForEach(filteredSpeciesSummaries) { summary in
+                            if isSelectionMode {
+                                Button {
+                                    // Hard haptic feedback when selecting/deselecting
+                                    let impactFeedback = UIImpactFeedbackGenerator(style: .heavy)
+                                    impactFeedback.impactOccurred()
+                                    
+                                    if selectedSpeciesSet.contains(summary.species) {
+                                        // If this is the only selected item, exit selection mode
+                                        if selectedSpeciesSet.count == 1 {
+                                            isSelectionMode = false
+                                            selectedSpeciesSet.removeAll()
+                                        } else {
+                                            selectedSpeciesSet.remove(summary.species)
+                                        }
+                                    } else {
+                                        selectedSpeciesSet.insert(summary.species)
+                                    }
+                                } label: {
+                                    speciesRowContent(summary)
+                                }
+                                .buttonStyle(.plain)
+                            } else {
                                 speciesRowContent(summary)
+                                    .contentShape(Rectangle())
+                                    .onTapGesture {
+                                        if !isSelectionMode {
+                                            selectedSpecies = summary
+                                        }
+                                    }
+                                    .highPriorityGesture(
+                                        LongPressGesture(minimumDuration: 0.5)
+                                            .onEnded { _ in
+                                                // Stop any playing audio
+                                                playbackTask?.cancel()
+                                                playbackTask = nil
+                                                playingSpecies = nil
+                                                speciesPlayer.stop()
+                                                
+                                                // Hard haptic feedback when entering selection mode
+                                                let impactFeedback = UIImpactFeedbackGenerator(style: .heavy)
+                                                impactFeedback.impactOccurred()
+                                                
+                                                isSelectionMode = true
+                                                selectedSpeciesSet.insert(summary.species)
+                                            }
+                                    )
                             }
-                            .buttonStyle(.plain)
                         }
                     }
                     .padding(.top, 16)
@@ -264,9 +363,10 @@ struct ResultsView: View {
 
     private func speciesRowContent(_ summary: SpeciesSummary) -> some View {
         let (commonName, scientificName) = parseSpeciesName(summary.species)
+        let isSelected = selectedSpeciesSet.contains(summary.species)
+        let opacity = isSelectionMode && !isSelected ? 0.5 : 1.0
         
-        return
-        ZStack {
+        return ZStack {
             RoundedRectangle(cornerRadius: 24, style: .continuous)
                 .fill(.ultraThinMaterial)
                 .overlay(
@@ -288,30 +388,33 @@ struct ResultsView: View {
                 // Bird image with play button
                 BirdImageViewWithPlayButton(
                     species: summary.species,
-                    isPlaying: playingSpecies == summary.species,
+                    isPlaying: playingSpecies == summary.species && !isSelectionMode,
                     onPlay: {
-                        if playingSpecies == summary.species {
-                            // Pause current species
-                            playbackTask?.cancel()
-                            playbackTask = nil
-                            playingSpecies = nil
-                            speciesPlayer.stop()
-                        } else {
-                            // Stop any currently playing species first
-                            playbackTask?.cancel()
-                            playbackTask = nil
-                            playingSpecies = nil
-                            speciesPlayer.stop()
-                            
-                            // Start the new species immediately
-                            playingSpecies = summary.species
-                            playbackTask = Task {
-                                await playAllClipsForSpecies(summary.species)
+                        if !isSelectionMode {
+                            if playingSpecies == summary.species {
+                                // Pause current species
+                                playbackTask?.cancel()
+                                playbackTask = nil
+                                playingSpecies = nil
+                                speciesPlayer.stop()
+                            } else {
+                                // Stop any currently playing species first
+                                playbackTask?.cancel()
+                                playbackTask = nil
+                                playingSpecies = nil
+                                speciesPlayer.stop()
+                                
+                                // Start the new species immediately
+                                playingSpecies = summary.species
+                                playbackTask = Task {
+                                    await playAllClipsForSpecies(summary.species)
+                                }
                             }
                         }
                     }
                 )
                 .environmentObject(viewModel)
+                .allowsHitTesting(!isSelectionMode)
                 
                 VStack(alignment: .leading, spacing: 4) {
                     Text(commonName)
@@ -326,17 +429,30 @@ struct ResultsView: View {
                 Spacer()
                 
                 HStack(spacing: 4) {
-                    Text("\(summary.clipCount) clip\(summary.clipCount == 1 ? "" : "s")")
-                        .font(.subheadline.bold())
-                        .foregroundColor(.gray)
-                    
-                    Image(systemName: "chevron.right")
-                        .font(.caption.bold())
-                        .foregroundColor(.gray)
+                    if isSelectionMode {
+                        if selectedSpeciesSet.contains(summary.species) {
+                            Image(systemName: "checkmark.circle.fill")
+                                .font(.title3)
+                                .foregroundColor(.black)
+                        } else {
+                            Image(systemName: "circle")
+                                .font(.title3)
+                                .foregroundColor(.gray)
+                        }
+                    } else {
+                        Text("\(summary.clipCount) clip\(summary.clipCount == 1 ? "" : "s")")
+                            .font(.subheadline.bold())
+                            .foregroundColor(.gray)
+                        
+                        Image(systemName: "chevron.right")
+                            .font(.caption.bold())
+                            .foregroundColor(.gray)
+                    }
                 }
             }
             .padding(12)
         }
+        .opacity(opacity)
     }
     
     private func parseSpeciesName(_ species: String) -> (commonName: String, scientificName: String) {
@@ -416,6 +532,66 @@ struct ResultsView: View {
                     if !validURLs.isEmpty {
                         shareURLs = validURLs
                         isPresentingShareSheet = true
+                    }
+                    isExportingAll = false
+                }
+            } catch {
+                await MainActor.run {
+                    isExportingAll = false
+                }
+            }
+        }
+    }
+    
+    private func exportSelected() {
+        guard let buffer = viewModel.audioBuffer else { return }
+        // Filter segments to only include selected species
+        let filteredSegments = viewModel.speciesSegments.filter { selectedSpeciesSet.contains($0.key) }
+        let mode = viewModel.exportMode
+
+        isExportingAll = true
+
+        Task {
+            do {
+                let urls: [URL]
+                switch mode {
+                case .perSpecies:
+                    urls = try ExportService.exportPerSpecies(
+                        speciesSegments: filteredSegments,
+                        from: buffer,
+                        sampleRate: viewModel.sampleRate,
+                        recordingDate: viewModel.recordingDate
+                    )
+                case .perCall:
+                    urls = try ExportService.exportPerCall(
+                        speciesSegments: filteredSegments,
+                        from: buffer,
+                        sampleRate: viewModel.sampleRate,
+                        recordingDate: viewModel.recordingDate
+                    )
+                }
+
+                // Verify all files exist and are valid before showing share sheet
+                let validURLs = urls.filter { url in
+                    guard FileManager.default.fileExists(atPath: url.path),
+                          FileManager.default.isReadableFile(atPath: url.path),
+                          let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
+                          let fileSize = attributes[.size] as? Int64, fileSize > 0 else {
+                        return false
+                    }
+                    return true
+                }
+                
+                // Small delay to ensure files are fully written and accessible
+                try? await Task.sleep(nanoseconds: 200_000_000) // 0.2 seconds
+                
+                await MainActor.run {
+                    if !validURLs.isEmpty {
+                        shareURLs = validURLs
+                        isPresentingShareSheet = true
+                        // Exit selection mode after export
+                        isSelectionMode = false
+                        selectedSpeciesSet.removeAll()
                     }
                     isExportingAll = false
                 }

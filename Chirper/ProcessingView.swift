@@ -25,6 +25,8 @@ struct ProcessingView: View {
                 Text(cyclingMessages[currentMessageIndex])
                     .font(.subheadline)
                     .foregroundColor(.gray)
+                    .id(currentMessageIndex) // Force view identity change for smooth transition
+                    .transition(.opacity.combined(with: .scale(scale: 0.95)))
 
                 VStack(spacing: 8) {
                     GeometryReader { geometry in
@@ -35,6 +37,7 @@ struct ProcessingView: View {
                             Rectangle()
                                 .fill(Color.black)
                                 .frame(width: max(0, min(geometry.size.width, geometry.size.width * animatedProgress)))
+                                .animation(.linear(duration: 0.1), value: animatedProgress)
                         }
                         .clipShape(RoundedRectangle(cornerRadius: 4))
                     }
@@ -43,6 +46,8 @@ struct ProcessingView: View {
                     Text("\(Int(animatedProgress * 100))%")
                         .font(.caption)
                         .foregroundColor(.gray)
+                        .contentTransition(.numericText())
+                        .animation(.linear(duration: 0.1), value: animatedProgress)
                 }
             }
             .frame(maxWidth: .infinity)
@@ -67,11 +72,10 @@ struct ProcessingView: View {
             stopAnimations()
         }
         .onChange(of: viewModel.processingProgress) { oldValue, newValue in
-            // When processing completes, animate from 80% to 100%
-            if newValue >= 1.0 && animatedProgress < 1.0 {
-                withAnimation(.linear(duration: 0.5)) {
-                    animatedProgress = 1.0
-                }
+            // Smoothly update progress based on actual processing
+            let targetProgress = min(0.8 + (newValue * 0.2), 1.0) // Map 0-1 to 80-100%
+            withAnimation(.linear(duration: 0.2)) {
+                animatedProgress = targetProgress
             }
         }
     }
@@ -80,16 +84,16 @@ struct ProcessingView: View {
         // Start cycling messages every 2 seconds
         messageTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { _ in
             Task { @MainActor in
-                withAnimation(.easeInOut(duration: 0.3)) {
+                withAnimation(.easeInOut(duration: 0.4)) {
                     currentMessageIndex = (currentMessageIndex + 1) % cyclingMessages.count
                 }
             }
         }
         
-        // Reset progress to 0 and animate from 0% to 80% over 2 seconds
+        // Reset progress to 0 and smoothly animate from 0% to 80%
         animatedProgress = 0.0
         DispatchQueue.main.async {
-            withAnimation(.linear(duration: 2.0)) {
+            withAnimation(.easeInOut(duration: 2.0)) {
                 self.animatedProgress = 0.8
             }
         }

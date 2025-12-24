@@ -148,4 +148,18 @@ struct GlassTrashButton: View {
     }
 }
 
+struct GlassCancelButton: View {
+    let action: () -> Void
+    
+    var body: some View {
+        Button(action: action) {
+            Text("Cancel")
+                .font(.body)
+                .fontWeight(.regular)
+                .foregroundStyle(.gray)
+        }
+        .buttonStyle(.plain)
+    }
+}
+
 
