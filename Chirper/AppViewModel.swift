@@ -36,7 +36,7 @@ final class AppViewModel: ObservableObject {
 
     // UI controls (results)
     @Published var exportMode: ExportMode = .perSpecies
-    @Published var confidenceThreshold: Double = 0.25
+    @Published var confidenceThreshold: Double = 0.75
     // Keep very small default padding; user can increase if desired.
     @Published var paddingMs: Double = 50
     

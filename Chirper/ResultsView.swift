@@ -16,6 +16,9 @@ struct ResultsView: View {
     @State private var playbackTask: Task<Void, Never>? = nil
     @State private var isSelectionMode = false
     @State private var selectedSpeciesSet: Set<String> = []
+    @State private var isShowingFilterSheet = false
+    @State private var tempConfidenceThreshold: Double = 0.75
+    @State private var previousSliderValue: Double = 0.75
 
     var body: some View {
         VStack(spacing: 0) {
@@ -61,6 +64,7 @@ struct ResultsView: View {
         }
         .onAppear {
             prepareAllExports()
+            tempConfidenceThreshold = viewModel.confidenceThreshold
         }
         .sheet(isPresented: $isPresentingShareSheet, onDismiss: {
             ExportService.cleanupTempFiles(urls: shareURLs)
@@ -70,6 +74,9 @@ struct ResultsView: View {
         }
         .sheet(isPresented: $isShowingExportOptions) {
             exportOptionsSheet
+        }
+        .sheet(isPresented: $isShowingFilterSheet) {
+            filterSheet
         }
     }
     
@@ -114,15 +121,29 @@ struct ResultsView: View {
                         selectedSpeciesSet.removeAll()
                     }
                 } else {
-                    Button {
-                        viewModel.resetToImport()
-                    } label: {
-                        Image(systemName: "xmark")
-                            .font(.system(size: 16, weight: .semibold))
-                            .foregroundColor(.black)
-                            .frame(width: 32, height: 32)
-                            .background(Color.white)
-                            .clipShape(Circle())
+                    HStack(spacing: 8) {
+                        Button {
+                            isShowingFilterSheet = true
+                            tempConfidenceThreshold = viewModel.confidenceThreshold
+                        } label: {
+                            Image(systemName: "slider.horizontal.3")
+                                .font(.system(size: 16, weight: .semibold))
+                                .foregroundColor(.black)
+                                .frame(width: 32, height: 32)
+                                .background(Color.white)
+                                .clipShape(Circle())
+                        }
+                        
+                        Button {
+                            viewModel.resetToImport()
+                        } label: {
+                            Image(systemName: "xmark")
+                                .font(.system(size: 16, weight: .semibold))
+                                .foregroundColor(.black)
+                                .frame(width: 32, height: 32)
+                                .background(Color.white)
+                                .clipShape(Circle())
+                        }
                     }
                 }
             }
@@ -186,8 +207,8 @@ struct ResultsView: View {
                 }
             }
             .buttonStyle(.plain)
-            .disabled(isSelectionMode ? selectedSpeciesSet.isEmpty : viewModel.speciesSegments.isEmpty)
-            .opacity((isSelectionMode ? selectedSpeciesSet.isEmpty : viewModel.speciesSegments.isEmpty) ? 0.5 : 1.0)
+            .disabled(isSelectionMode ? selectedSpeciesSet.isEmpty : (viewModel.speciesSegments.isEmpty || filteredSpeciesSummaries.isEmpty))
+            .opacity((isSelectionMode ? selectedSpeciesSet.isEmpty : (viewModel.speciesSegments.isEmpty || filteredSpeciesSummaries.isEmpty)) ? 0.5 : 1.0)
         }
     }
     
@@ -282,8 +303,228 @@ struct ResultsView: View {
         .presentationDetents([.height(180)])
     }
     
+    private var filterSheet: some View {
+        NavigationView {
+            VStack(spacing: 24) {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Text("1%")
+                            .font(.subheadline)
+                            .foregroundColor(.gray)
+                        
+                        Spacer()
+                        
+                        Text("\(Int(tempConfidenceThreshold * 100))%")
+                            .font(.headline.bold())
+                            .foregroundColor(.black)
+                        
+                        Spacer()
+                        
+                        Text("100%")
+                            .font(.subheadline)
+                            .foregroundColor(.gray)
+                    }
+                    
+                    VStack(spacing: 8) {
+                        // Custom slider with right-side fill (accepted region)
+                        GeometryReader { geometry in
+                            let sliderWidth = geometry.size.width
+                            let sliderHeight: CGFloat = 4
+                            let thumbSize: CGFloat = 20
+                            let range: ClosedRange<Double> = 0.01...1.0
+                            let normalizedValue = (tempConfidenceThreshold - range.lowerBound) / (range.upperBound - range.lowerBound)
+                            let thresholdPosition = CGFloat(normalizedValue) * sliderWidth
+                            
+                            ZStack(alignment: .leading) {
+                                // Background track (light gray for rejected region - left side)
+                                RoundedRectangle(cornerRadius: 2)
+                                    .fill(Color.gray.opacity(0.2))
+                                    .frame(height: sliderHeight)
+                                
+                                // Filled track (black for accepted region - right side, above threshold)
+                                HStack(spacing: 0) {
+                                    Spacer()
+                                    RoundedRectangle(cornerRadius: 2)
+                                        .fill(Color.black)
+                                        .frame(width: max(0, sliderWidth - thresholdPosition), height: sliderHeight)
+                                }
+                                
+                                // Slider thumb
+                                Circle()
+                                    .fill(Color.black)
+                                    .frame(width: thumbSize, height: thumbSize)
+                                    .overlay(
+                                        Circle()
+                                            .stroke(Color.white, lineWidth: 2)
+                                    )
+                                    .offset(x: max(0, min(sliderWidth - thumbSize, thresholdPosition - thumbSize / 2)))
+                                    .gesture(
+                                        DragGesture(minimumDistance: 0)
+                                            .onChanged { value in
+                                                let newPosition = max(0, min(sliderWidth, value.location.x))
+                                                let newNormalized = Double(newPosition / sliderWidth)
+                                                let newValue = range.lowerBound + newNormalized * (range.upperBound - range.lowerBound)
+                                                let oldValue = tempConfidenceThreshold
+                                                tempConfidenceThreshold = newValue
+                                                checkHapticFeedback(oldValue: oldValue, newValue: newValue)
+                                            }
+                                    )
+                            }
+                            .frame(height: thumbSize)
+                        }
+                        .frame(height: 20)
+                        
+                        // Markers area below slider
+                        GeometryReader { geometry in
+                            let sliderWidth = geometry.size.width
+                            let sliderRange: ClosedRange<Double> = 0.01...1.0
+                            let normalizedRange = sliderRange.upperBound - sliderRange.lowerBound
+                            
+                            ZStack(alignment: .leading) {
+                                // Dotted line
+                                Path { path in
+                                    path.move(to: CGPoint(x: 0, y: 20))
+                                    path.addLine(to: CGPoint(x: sliderWidth, y: 20))
+                                }
+                                .stroke(style: StrokeStyle(lineWidth: 1, dash: [2, 2]))
+                                .foregroundColor(.gray.opacity(0.3))
+                                
+                                // Confidence markers
+                                ForEach(confidenceMarkers, id: \.confidence) { marker in
+                                    let position = CGFloat((marker.confidence - sliderRange.lowerBound) / normalizedRange) * sliderWidth
+                                    let circleSize: CGFloat = marker.count > 9 ? 28 : 24
+                                    let circleRadius = circleSize / 2
+                                
+                                    ZStack(alignment: .leading) {
+                                        // Vertical line from top to dotted line
+                                        Path { path in
+                                            path.move(to: CGPoint(x: position, y: 0))
+                                            path.addLine(to: CGPoint(x: position, y: 20))
+                                        }
+                                        .stroke(Color.black, lineWidth: 1)
+                                        
+                                        // Circle with count on the dotted line
+                                        Circle()
+                                            .fill(Color.black)
+                                            .frame(width: circleSize, height: circleSize)
+                                            .overlay(
+                                                Text("\(marker.count)")
+                                                    .font(.system(size: marker.count > 9 ? 10 : 11, weight: .bold))
+                                                    .foregroundColor(.white)
+                                            )
+                                            .offset(x: position - circleRadius, y: 20 - circleRadius)
+                                    }
+                                }
+                            }
+                        }
+                        .frame(height: 50)
+                    }
+                }
+                .padding(.horizontal, 20)
+                .padding(.top, 20)
+                
+                Button {
+                    viewModel.confidenceThreshold = tempConfidenceThreshold
+                    isShowingFilterSheet = false
+                } label: {
+                    Text("Apply")
+                        .font(.headline)
+                        .foregroundColor(.white)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 50)
+                        .background(Color.black)
+                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                }
+                .buttonStyle(.plain)
+                .disabled(abs(tempConfidenceThreshold - viewModel.confidenceThreshold) < 0.001)
+                .opacity(abs(tempConfidenceThreshold - viewModel.confidenceThreshold) < 0.001 ? 0.5 : 1.0)
+                .padding(.horizontal, 20)
+                .padding(.bottom, 20)
+            }
+            .navigationTitle("Confidence acceptance")
+            .navigationBarTitleDisplayMode(.inline)
+        }
+        .presentationDetents([.height(250)])
+        .onAppear {
+            previousSliderValue = tempConfidenceThreshold
+        }
+    }
+    
+    private struct ConfidenceMarker {
+        let confidence: Double
+        let count: Int
+    }
+    
+    private var confidenceMarkers: [ConfidenceMarker] {
+        // Group species by their maxConfidence rounded to nearest percent
+        var confidenceGroups: [Int: Int] = [:]
+        
+        for summary in viewModel.speciesSummaries {
+            let percent = Int(round(summary.maxConfidence * 100))
+            confidenceGroups[percent, default: 0] += 1
+        }
+        
+        // Convert to array of markers, sorted by confidence
+        let rawMarkers = confidenceGroups.map { ConfidenceMarker(confidence: Double($0.key) / 100.0, count: $0.value) }
+            .sorted { $0.confidence < $1.confidence }
+        
+        // Merge markers that are too close together (within 3% of each other to prevent visual overlap)
+        // This accounts for circle size (24-28px) which at typical slider widths would overlap if markers are <3% apart
+        var mergedMarkers: [ConfidenceMarker] = []
+        var currentGroup: [ConfidenceMarker] = []
+        
+        for marker in rawMarkers {
+            if let lastMarker = currentGroup.last {
+                // If this marker is within 3% of the last one, add to current group
+                // Using 3% to ensure circles don't visually overlap (accounting for ~28px circle width)
+                if marker.confidence - lastMarker.confidence <= 0.03 {
+                    currentGroup.append(marker)
+                } else {
+                    // Merge the current group and start a new one
+                    if !currentGroup.isEmpty {
+                        let totalCount = currentGroup.reduce(0) { $0 + $1.count }
+                        let avgConfidence = currentGroup.reduce(0.0) { $0 + $1.confidence } / Double(currentGroup.count)
+                        mergedMarkers.append(ConfidenceMarker(confidence: avgConfidence, count: totalCount))
+                    }
+                    currentGroup = [marker]
+                }
+            } else {
+                currentGroup = [marker]
+            }
+        }
+        
+        // Don't forget the last group
+        if !currentGroup.isEmpty {
+            let totalCount = currentGroup.reduce(0) { $0 + $1.count }
+            let avgConfidence = currentGroup.reduce(0.0) { $0 + $1.confidence } / Double(currentGroup.count)
+            mergedMarkers.append(ConfidenceMarker(confidence: avgConfidence, count: totalCount))
+        }
+        
+        return mergedMarkers
+    }
+    
+    private func checkHapticFeedback(oldValue: Double, newValue: Double) {
+        let oldPercent = Int(round(oldValue * 100))
+        let newPercent = Int(round(newValue * 100))
+        
+        // Check if we passed over any confidence marker
+        for marker in confidenceMarkers {
+            let markerPercent = Int(round(marker.confidence * 100))
+            
+            // Check if we crossed over this marker
+            if (oldPercent < markerPercent && newPercent >= markerPercent) ||
+               (oldPercent > markerPercent && newPercent <= markerPercent) {
+                let impactFeedback = UIImpactFeedbackGenerator(style: .medium)
+                impactFeedback.impactOccurred()
+                break
+            }
+        }
+        
+        previousSliderValue = newValue
+    }
+    
     private var filteredSpeciesSummaries: [SpeciesSummary] {
-        viewModel.speciesSummaries.filter { $0.maxConfidence > 0.75 }
+        viewModel.speciesSummaries.filter { $0.maxConfidence > viewModel.confidenceThreshold }
     }
     
     private var totalClipCount: Int {
@@ -293,7 +534,24 @@ struct ResultsView: View {
     private var listSection: some View {
         Group {
             if filteredSpeciesSummaries.isEmpty {
-                GlassCard {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 24, style: .continuous)
+                        .fill(.ultraThinMaterial)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                                .strokeBorder(
+                                    LinearGradient(
+                                        colors: [
+                                            .white.opacity(0.3),
+                                            .white.opacity(0.05)
+                                        ],
+                                        startPoint: .topLeading,
+                                        endPoint: .bottomTrailing
+                                    ),
+                                    lineWidth: 1
+                                )
+                        )
+                    
                     Text("No species above the current confidence threshold. Try lowering it or using a different recording.")
                         .font(.subheadline)
                         .foregroundColor(.gray)
